@@ -1,0 +1,25 @@
+groups:
+  - name: work
+    projects:
+      - name: platform
+        repos:
+          - ~/code/frontend    # master repo — sessions start here
+          - ~/code/backend
+          - ~/code/api
+        sessions:
+          - name: auth-refactor
+          - name: ui-cleanup
+
+      - name: api
+        repos:
+          - ~/code/api
+        sessions:
+          - name: api-work
+
+  - name: personal
+    projects:
+      - name: dotfiles
+        repos:
+          - ~/.dotfiles
+        sessions:
+          - name: dotfiles
