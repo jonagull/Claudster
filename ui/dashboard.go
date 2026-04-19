@@ -263,7 +263,19 @@ func renderSessionPreview(m Model, row sidebarRow, w, h int) string {
 	if pane == "" {
 		return lipgloss.NewStyle().Padding(1, 2).Render(MutedItem.Render("no output yet"))
 	}
-	return clipLines(pane, h)
+
+	// tmux pads every captured line to the full pane width (which can be much
+	// wider than our preview panel). Strip trailing spaces and truncate to w so
+	// lines never wrap inside the panel and inflate its visual height.
+	rawLines := strings.Split(pane, "\n")
+	for i, line := range rawLines {
+		line = strings.TrimRight(line, " ")
+		if len(line) > w {
+			line = line[:w]
+		}
+		rawLines[i] = line
+	}
+	return clipLines(strings.Join(rawLines, "\n"), h)
 }
 
 func renderProjectPreview(m Model, row sidebarRow, w, h int) string {

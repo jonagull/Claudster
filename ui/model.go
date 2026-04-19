@@ -337,6 +337,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		m.dangerousMode = !m.dangerousMode
 
+	case "P":
+		return m.restartCurrentSession()
+
 	case "e":
 		editor := os.Getenv("EDITOR")
 		if editor == "" {
@@ -448,6 +451,31 @@ func (m Model) startNewProject() Model {
 	m.modal.input.SetValue("")
 	m.modal.input.Focus()
 	return m
+}
+
+func (m Model) restartCurrentSession() (tea.Model, tea.Cmd) {
+	if m.cursor >= len(m.rows) {
+		return m, nil
+	}
+	row := m.rows[m.cursor]
+	if row.typ != rowTypeSession || !tmux.SessionExists(row.label) {
+		m.setStatus("select a running session first")
+		return m, nil
+	}
+	name := row.label
+	dangerous := m.dangerousMode
+	proj := m.config.Groups[row.groupIdx].Projects[row.projectIdx]
+	primaryRepo := proj.PrimaryRepo()
+	mode := "normal"
+	if dangerous {
+		mode = "bypass"
+	}
+	m.setStatus(fmt.Sprintf("restarting %s in %s mode…", name, mode))
+	return m, func() tea.Msg {
+		convoID := metrics.LatestConvoID(primaryRepo)
+		tmux.RestartSession(name, convoID, dangerous)
+		return nil
+	}
 }
 
 func (m *Model) deleteSelected() {
@@ -771,6 +799,7 @@ func renderHelpBar(m Model) string {
 		{"N", "new project"},
 		{"space", "expand/collapse"},
 		{"d", "delete session"},
+		{"P", "restart session"},
 		{"e", "edit config"},
 		{"q/ctrl+q", "quit"},
 	}

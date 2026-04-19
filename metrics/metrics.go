@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -65,6 +66,41 @@ type jsonlEntry struct {
 			CacheCreate int64 `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
+}
+
+// LatestConvoID returns the UUID of the most recently modified conversation
+// for the given project directory (e.g. "~/code/myproject"). Returns "" if
+// nothing is found so the caller can fall back to `claude --resume`.
+func LatestConvoID(projectPath string) string {
+	home, _ := os.UserHomeDir()
+	if strings.HasPrefix(projectPath, "~/") {
+		projectPath = filepath.Join(home, projectPath[2:])
+	}
+	// Claude encodes the project path as the directory name by replacing / with -
+	encoded := strings.ReplaceAll(projectPath, "/", "-")
+	dir := filepath.Join(home, ".claude", "projects", encoded)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+
+	var latestMod time.Time
+	var latestID string
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(latestMod) {
+			latestMod = info.ModTime()
+			latestID = strings.TrimSuffix(e.Name(), ".jsonl")
+		}
+	}
+	return latestID
 }
 
 // Collect scans all Claude Code project directories and aggregates token usage.

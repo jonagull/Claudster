@@ -92,7 +92,8 @@ func renderSidebar(m Model) string {
 	}
 
 	content := strings.Join(lines, "\n")
-	body := lipgloss.JoinVertical(lipgloss.Left, header, content)
+	// Clip to innerH so the sidebar border never overflows its allocated height.
+	body := clipLines(lipgloss.JoinVertical(lipgloss.Left, header, content), innerH)
 
 	return ActiveBorder.
 		Width(m.sidebarW).
