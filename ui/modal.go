@@ -14,7 +14,7 @@ func renderModal(m Model) string {
 	case modalNewProject:
 		title = "New Project"
 		fieldLabel = "Group:"
-		hint = "a template opens in " + editorName() + " — fill in name & repos there"
+		hint = "tab to autocomplete  ·  template opens in " + editorName()
 
 	case modalNewSession:
 		title = fmt.Sprintf("New Session — %s", m.modal.targetProject)
@@ -23,6 +23,11 @@ func renderModal(m Model) string {
 		if m.dangerousMode {
 			hint += "  " + ErrorStyle.Render("⚠ --dangerously-skip-permissions")
 		}
+
+	case modalNewEditorSession:
+		title = fmt.Sprintf("New Editor Session — %s", m.modal.targetProject)
+		fieldLabel = "Session name:"
+		hint = "opens " + editorName() + " in " + primaryRepoHint(m)
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left,

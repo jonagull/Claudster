@@ -31,8 +31,13 @@ type Group struct {
 	Projects []Project `yaml:"projects"`
 }
 
+type UI struct {
+	SidebarWidth int `yaml:"sidebar_width,omitempty"`
+}
+
 type Config struct {
 	Groups []Group `yaml:"groups"`
+	UI     UI      `yaml:"ui,omitempty"`
 }
 
 func ConfigPath() string {

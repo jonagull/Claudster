@@ -43,9 +43,10 @@ type sidebarRow struct {
 type modalMode int
 
 const (
-	modalNone       modalMode = iota
-	modalNewProject           // N
-	modalNewSession           // n
+	modalNone             modalMode = iota
+	modalNewProject                 // N
+	modalNewSession                 // n
+	modalNewEditorSession           // B
 )
 
 // modalNewProject only needs one step (group name); the rest is done in $EDITOR.
@@ -56,6 +57,8 @@ type modalState struct {
 	targetGroup   string
 	targetProject string
 	input         textinput.Model
+	completions   []string // tab-cycle candidates (group names)
+	compIdx       int
 }
 
 func newModalState() modalState {
@@ -118,6 +121,18 @@ func New() Model {
 	m.rebuildRows()
 	m.pollMonitor()
 	return m
+}
+
+func (m *Model) allSessionNames() map[string]bool {
+	names := make(map[string]bool)
+	for _, g := range m.config.Groups {
+		for _, p := range g.Projects {
+			for _, s := range p.Sessions {
+				names[s.Name] = true
+			}
+		}
+	}
+	return names
 }
 
 func expandKey(gi, pi int) string {
@@ -208,11 +223,21 @@ func (m *Model) pollMonitor() {
 	m.monitor.Poll(names)
 }
 
+const defaultSidebarW = 32
+const minSidebarW = 16
+const maxSidebarW = 60
+
 func (m *Model) recalcLayout() {
 	if m.width == 0 {
 		return
 	}
-	m.sidebarW = 32
+	m.sidebarW = m.config.UI.SidebarWidth
+	if m.sidebarW < minSidebarW {
+		m.sidebarW = defaultSidebarW
+	}
+	if m.sidebarW > maxSidebarW {
+		m.sidebarW = maxSidebarW
+	}
 	m.dashW = m.width - m.sidebarW - 6
 	if m.dashW < 10 {
 		m.dashW = 10
@@ -340,6 +365,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "P":
 		return m.restartCurrentSession()
 
+	case "v":
+		return m.openInEditor()
+
+	case "V":
+		return m.startNewEditorSession(), nil
+
 	case "e":
 		editor := os.Getenv("EDITOR")
 		if editor == "" {
@@ -349,6 +380,24 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 			return editorDoneMsg{}
 		})
+
+	case "]":
+		w := m.sidebarW + 2
+		if w > maxSidebarW {
+			w = maxSidebarW
+		}
+		m.config.UI.SidebarWidth = w
+		m.recalcLayout()
+		store.Save(m.config)
+
+	case "[":
+		w := m.sidebarW - 2
+		if w < minSidebarW {
+			w = minSidebarW
+		}
+		m.config.UI.SidebarWidth = w
+		m.recalcLayout()
+		store.Save(m.config)
 	}
 
 	return m, nil
@@ -445,12 +494,58 @@ func (m Model) startNewSession() Model {
 	return m
 }
 
+func (m Model) startNewEditorSession() Model {
+	if m.cursor >= len(m.rows) {
+		return m
+	}
+	row := m.rows[m.cursor]
+	if row.typ == rowTypeGroup {
+		return m
+	}
+	gi, pi := row.groupIdx, row.projectIdx
+	m.modal.mode = modalNewEditorSession
+	m.modal.targetGroup = m.config.Groups[gi].Name
+	m.modal.targetProject = m.config.Groups[gi].Projects[pi].Name
+	m.modal.input.Placeholder = "e.g. edit"
+	m.modal.input.SetValue("")
+	m.modal.input.Focus()
+	return m
+}
+
 func (m Model) startNewProject() Model {
 	m.modal.mode = modalNewProject
 	m.modal.input.Placeholder = existingGroupHint(m.config)
 	m.modal.input.SetValue("")
 	m.modal.input.Focus()
 	return m
+}
+
+func (m Model) openInEditor() (tea.Model, tea.Cmd) {
+	if m.cursor >= len(m.rows) {
+		return m, nil
+	}
+	row := m.rows[m.cursor]
+	var primaryRepo string
+	switch row.typ {
+	case rowTypeProject:
+		proj := m.config.Groups[row.groupIdx].Projects[row.projectIdx]
+		primaryRepo = proj.PrimaryRepo()
+	case rowTypeSession:
+		proj := m.config.Groups[row.groupIdx].Projects[row.projectIdx]
+		primaryRepo = proj.PrimaryRepo()
+	default:
+		m.setStatus("select a project or session first")
+		return m, nil
+	}
+	path := tmux.ExpandPath(primaryRepo)
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "nvim"
+	}
+	cmd := exec.Command(editor, path)
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return editorDoneMsg{}
+	})
 }
 
 func (m Model) restartCurrentSession() (tea.Model, tea.Cmd) {
@@ -652,10 +747,36 @@ func (m Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		m.dangerousMode = !m.dangerousMode
 		return m, nil
+	case "tab":
+		if m.modal.mode == modalNewProject {
+			m.cycleGroupCompletion()
+			return m, nil
+		}
 	}
+	// Any non-tab key resets completions so the next Tab re-filters.
+	m.modal.completions = nil
 	var cmd tea.Cmd
 	m.modal.input, cmd = m.modal.input.Update(msg)
 	return m, cmd
+}
+
+func (m *Model) cycleGroupCompletion() {
+	// Build candidate list from groups matching the current prefix.
+	prefix := strings.ToLower(m.modal.input.Value())
+	if len(m.modal.completions) == 0 {
+		for _, g := range m.config.Groups {
+			if strings.HasPrefix(strings.ToLower(g.Name), prefix) {
+				m.modal.completions = append(m.modal.completions, g.Name)
+			}
+		}
+		m.modal.compIdx = 0
+	} else {
+		m.modal.compIdx = (m.modal.compIdx + 1) % len(m.modal.completions)
+	}
+	if len(m.modal.completions) > 0 {
+		m.modal.input.SetValue(m.modal.completions[m.modal.compIdx])
+		m.modal.input.CursorEnd()
+	}
 }
 
 func (m Model) handleModalEnter() (tea.Model, tea.Cmd) {
@@ -686,6 +807,10 @@ func (m Model) handleModalEnter() (tea.Model, tea.Cmd) {
 
 	case modalNewSession:
 		name := val
+		if m.allSessionNames()[name] {
+			m.setStatus(fmt.Sprintf("session %q already exists — names must be unique", name))
+			return m, nil
+		}
 		var proj *store.Project
 		for gi := range m.config.Groups {
 			if m.config.Groups[gi].Name == m.modal.targetGroup {
@@ -722,6 +847,57 @@ func (m Model) handleModalEnter() (tea.Model, tea.Cmd) {
 			}
 		}
 
+		script := fmt.Sprintf(
+			"tmux bind-key -n C-q detach-client; tmux attach-session -t '%s'; tmux unbind-key -n C-q 2>/dev/null",
+			name,
+		)
+		cmd := exec.Command("sh", "-c", script)
+		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+			return attachDoneMsg{err: err}
+		})
+
+	case modalNewEditorSession:
+		name := val
+		if m.allSessionNames()[name] {
+			m.setStatus(fmt.Sprintf("session %q already exists — names must be unique", name))
+			return m, nil
+		}
+		var proj *store.Project
+		for gi := range m.config.Groups {
+			if m.config.Groups[gi].Name == m.modal.targetGroup {
+				for pi := range m.config.Groups[gi].Projects {
+					if m.config.Groups[gi].Projects[pi].Name == m.modal.targetProject {
+						proj = &m.config.Groups[gi].Projects[pi]
+					}
+				}
+			}
+		}
+		if proj == nil {
+			m.setStatus("project not found")
+			m.modal.mode = modalNone
+			return m, nil
+		}
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			editor = "nvim"
+		}
+		if err := tmux.NewEditorSession(name, proj.PrimaryRepo(), editor); err != nil {
+			m.setStatus(fmt.Sprintf("error: %v", err))
+			m.modal.mode = modalNone
+			m.modal.input.Blur()
+			return m, nil
+		}
+		m.config.AddSession(m.modal.targetGroup, m.modal.targetProject, store.Session{Name: name})
+		store.Save(m.config)
+		m.modal.mode = modalNone
+		m.modal.input.Blur()
+		m.rebuildRows()
+		for i, r := range m.rows {
+			if r.typ == rowTypeSession && r.label == name {
+				m.cursor = i
+				break
+			}
+		}
 		script := fmt.Sprintf(
 			"tmux bind-key -n C-q detach-client; tmux attach-session -t '%s'; tmux unbind-key -n C-q 2>/dev/null",
 			name,
@@ -797,10 +973,13 @@ func renderHelpBar(m Model) string {
 		{"enter", "attach/expand"},
 		{"n", "new session"},
 		{"N", "new project"},
+		{"v", "open in editor"},
+		{"V", "editor session"},
 		{"space", "expand/collapse"},
 		{"d", "delete session"},
 		{"P", "restart session"},
 		{"e", "edit config"},
+		{"[/]", "resize sidebar"},
 		{"q/ctrl+q", "quit"},
 	}
 	var parts []string

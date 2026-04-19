@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func expandPath(path string) string {
+func ExpandPath(path string) string {
 	if strings.HasPrefix(path, "~/") {
 		home, _ := os.UserHomeDir()
 		return filepath.Join(home, path[2:])
@@ -31,10 +31,21 @@ func ListSessions() ([]string, error) {
 }
 
 func NewSession(name, path string, dangerous bool) error {
-	args := []string{"new-session", "-d", "-s", name, "-c", expandPath(path), "claude"}
+	args := []string{"new-session", "-d", "-s", name, "-c", ExpandPath(path), "claude"}
 	if dangerous {
 		args = append(args, "--dangerously-skip-permissions")
 	}
+	cmd := exec.Command("tmux", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
+}
+
+func NewEditorSession(name, path, editor string) error {
+	expanded := ExpandPath(path)
+	args := []string{"new-session", "-d", "-s", name, "-c", expanded, editor, expanded}
 	cmd := exec.Command("tmux", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

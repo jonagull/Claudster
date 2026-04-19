@@ -23,3 +23,7 @@ groups:
           - ~/.dotfiles
         sessions:
           - name: dotfiles
+
+# optional UI tweaks
+ui:
+  sidebar_width: 32   # use [ and ] to resize at runtime; saved here automatically
