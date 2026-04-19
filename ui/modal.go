@@ -8,6 +8,10 @@ import (
 )
 
 func renderModal(m Model) string {
+	if m.modal.mode == modalConfirmDelete {
+		return renderConfirmDelete(m)
+	}
+
 	var title, fieldLabel, hint string
 
 	switch m.modal.mode {
@@ -25,9 +29,14 @@ func renderModal(m Model) string {
 		}
 
 	case modalNewEditorSession:
-		title = fmt.Sprintf("New Editor Session — %s", m.modal.targetProject)
+		if m.modal.targetKind == "lazygit" {
+			title = fmt.Sprintf("New Lazygit Session — %s", m.modal.targetProject)
+			hint = "opens lazygit in " + primaryRepoHint(m)
+		} else {
+			title = fmt.Sprintf("New Editor Session — %s", m.modal.targetProject)
+			hint = "opens " + editorName() + " in " + primaryRepoHint(m)
+		}
 		fieldLabel = "Session name:"
-		hint = "opens " + editorName() + " in " + primaryRepoHint(m)
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
@@ -38,6 +47,30 @@ func renderModal(m Model) string {
 		InputStyle.Width(46).Render(m.modal.input.View()),
 		"",
 		HelpDesc.Render("enter  confirm    esc  cancel"),
+	)
+
+	return lipgloss.Place(m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		OverlayStyle.Render(body),
+	)
+}
+
+func renderConfirmDelete(m Model) string {
+	sessionName := ""
+	if m.cursor >= 0 && m.cursor < len(m.rows) {
+		sessionName = m.rows[m.cursor].label
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		OverlayTitle.Render("Delete Session"),
+		"",
+		HelpDesc.Render("Are you sure you want to delete:"),
+		"",
+		lipgloss.NewStyle().Foreground(ColorText).Bold(true).PaddingLeft(2).Render(sessionName),
+		"",
+		HelpDesc.Render("This will kill the tmux session and remove it from config."),
+		"",
+		ErrorStyle.Render("y")+HelpSep.Render("  confirm    ")+HelpKey.Render("esc")+HelpSep.Render("  cancel"),
 	)
 
 	return lipgloss.Place(m.width, m.height,

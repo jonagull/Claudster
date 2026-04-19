@@ -11,6 +11,11 @@ import (
 
 type Session struct {
 	Name string `yaml:"name"`
+	Kind string `yaml:"kind,omitempty"` // "": claude (default), "editor", "lazygit"
+}
+
+func (s Session) IsToolSession() bool {
+	return s.Kind == "editor" || s.Kind == "lazygit"
 }
 
 type Project struct {

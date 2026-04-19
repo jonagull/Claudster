@@ -46,7 +46,8 @@ const (
 	modalNone             modalMode = iota
 	modalNewProject                 // N
 	modalNewSession                 // n
-	modalNewEditorSession           // B
+	modalNewEditorSession           // V / G
+	modalConfirmDelete              // d
 )
 
 // modalNewProject only needs one step (group name); the rest is done in $EDITOR.
@@ -56,6 +57,7 @@ type modalState struct {
 	mode          modalMode
 	targetGroup   string
 	targetProject string
+	targetKind    string // for modalNewEditorSession: "editor" or "lazygit"
 	input         textinput.Model
 	completions   []string // tab-cycle candidates (group names)
 	compIdx       int
@@ -357,7 +359,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startNewProject(), nil
 
 	case "d":
-		m.deleteSelected()
+		return m.startConfirmDelete(), nil
 
 	case "p":
 		m.dangerousMode = !m.dangerousMode
@@ -369,7 +371,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openInEditor()
 
 	case "V":
-		return m.startNewEditorSession(), nil
+		return m.startNewToolSession("editor"), nil
+
+	case "G":
+		return m.openInLazygit()
 
 	case "e":
 		editor := os.Getenv("EDITOR")
@@ -494,7 +499,18 @@ func (m Model) startNewSession() Model {
 	return m
 }
 
-func (m Model) startNewEditorSession() Model {
+func (m Model) startConfirmDelete() Model {
+	if m.cursor >= len(m.rows) {
+		return m
+	}
+	if m.rows[m.cursor].typ != rowTypeSession {
+		return m
+	}
+	m.modal.mode = modalConfirmDelete
+	return m
+}
+
+func (m Model) startNewToolSession(kind string) Model {
 	if m.cursor >= len(m.rows) {
 		return m
 	}
@@ -506,7 +522,12 @@ func (m Model) startNewEditorSession() Model {
 	m.modal.mode = modalNewEditorSession
 	m.modal.targetGroup = m.config.Groups[gi].Name
 	m.modal.targetProject = m.config.Groups[gi].Projects[pi].Name
-	m.modal.input.Placeholder = "e.g. edit"
+	m.modal.targetKind = kind
+	placeholder := "e.g. edit"
+	if kind == "lazygit" {
+		placeholder = "e.g. git"
+	}
+	m.modal.input.Placeholder = placeholder
 	m.modal.input.SetValue("")
 	m.modal.input.Focus()
 	return m
@@ -518,6 +539,27 @@ func (m Model) startNewProject() Model {
 	m.modal.input.SetValue("")
 	m.modal.input.Focus()
 	return m
+}
+
+func (m Model) openInLazygit() (tea.Model, tea.Cmd) {
+	if m.cursor >= len(m.rows) {
+		return m, nil
+	}
+	row := m.rows[m.cursor]
+	var primaryRepo string
+	switch row.typ {
+	case rowTypeProject:
+		primaryRepo = m.config.Groups[row.groupIdx].Projects[row.projectIdx].PrimaryRepo()
+	case rowTypeSession:
+		primaryRepo = m.config.Groups[row.groupIdx].Projects[row.projectIdx].PrimaryRepo()
+	default:
+		m.setStatus("select a project or session first")
+		return m, nil
+	}
+	cmd := exec.Command("lazygit", "-p", tmux.ExpandPath(primaryRepo))
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return editorDoneMsg{}
+	})
 }
 
 func (m Model) openInEditor() (tea.Model, tea.Cmd) {
@@ -744,6 +786,12 @@ func (m Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.handleModalEnter()
+	case "y":
+		if m.modal.mode == modalConfirmDelete {
+			m.modal.mode = modalNone
+			m.deleteSelected()
+			return m, nil
+		}
 	case "p":
 		m.dangerousMode = !m.dangerousMode
 		return m, nil
@@ -877,17 +925,25 @@ func (m Model) handleModalEnter() (tea.Model, tea.Cmd) {
 			m.modal.mode = modalNone
 			return m, nil
 		}
-		editor := os.Getenv("EDITOR")
-		if editor == "" {
-			editor = "nvim"
+		kind := m.modal.targetKind
+		var startErr error
+		switch kind {
+		case "lazygit":
+			startErr = tmux.NewToolSession(name, proj.PrimaryRepo(), "lazygit")
+		default: // "editor"
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				editor = "nvim"
+			}
+			startErr = tmux.NewToolSession(name, proj.PrimaryRepo(), editor, tmux.ExpandPath(proj.PrimaryRepo()))
 		}
-		if err := tmux.NewEditorSession(name, proj.PrimaryRepo(), editor); err != nil {
-			m.setStatus(fmt.Sprintf("error: %v", err))
+		if startErr != nil {
+			m.setStatus(fmt.Sprintf("error: %v", startErr))
 			m.modal.mode = modalNone
 			m.modal.input.Blur()
 			return m, nil
 		}
-		m.config.AddSession(m.modal.targetGroup, m.modal.targetProject, store.Session{Name: name})
+		m.config.AddSession(m.modal.targetGroup, m.modal.targetProject, store.Session{Name: name, Kind: kind})
 		store.Save(m.config)
 		m.modal.mode = modalNone
 		m.modal.input.Blur()
@@ -975,6 +1031,7 @@ func renderHelpBar(m Model) string {
 		{"N", "new project"},
 		{"v", "open in editor"},
 		{"V", "editor session"},
+		{"G", "lazygit"},
 		{"space", "expand/collapse"},
 		{"d", "delete session"},
 		{"P", "restart session"},

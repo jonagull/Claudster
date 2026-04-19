@@ -61,11 +61,14 @@ func renderRightPanel(m Model) string {
 }
 
 func renderOverview(m Model, w, h int) string {
-	// Tally session states
+	// Tally session states (tool sessions excluded from Claude counts)
 	var nWorking, nDone, nIdle, nStopped int
 	for _, g := range m.config.Groups {
 		for _, p := range g.Projects {
 			for _, s := range p.Sessions {
+				if s.IsToolSession() {
+					continue
+				}
 				if !tmux.SessionExists(s.Name) {
 					nStopped++
 					continue
@@ -342,6 +345,13 @@ func renderCard(m Model, c cardData) string {
 	var statusLine string
 	if !c.running {
 		statusLine = MutedItem.Render("○  stopped")
+	} else if c.session.IsToolSession() {
+		switch c.session.Kind {
+		case "lazygit":
+			statusLine = MutedItem.Render("⎇  lazygit")
+		default:
+			statusLine = MutedItem.Render("✎  editor")
+		}
 	} else {
 		switch c.state.Status {
 		case tmux.StatusWorking:

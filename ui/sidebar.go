@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"claudster/store"
 	"claudster/tmux"
 )
 
@@ -86,7 +87,8 @@ func renderSidebar(m Model) string {
 			case rowTypeSession:
 				state := m.monitor.Get(row.label)
 				running := tmux.SessionExists(row.label)
-				lines = append(lines, renderSidebarSession(m, i, row, state, running))
+				sess := m.config.Groups[row.groupIdx].Projects[row.projectIdx].Sessions[row.sessionIdx]
+				lines = append(lines, renderSidebarSession(m, i, row, sess, state, running))
 			}
 		}
 	}
@@ -101,9 +103,15 @@ func renderSidebar(m Model) string {
 		Render(body)
 }
 
-func renderSidebarSession(m Model, i int, row sidebarRow, state tmux.State, running bool) string {
-	icon := sidebarIcon(m, state, running)
-	badge := sidebarBadge(state, running)
+func renderSidebarSession(m Model, i int, row sidebarRow, sess store.Session, state tmux.State, running bool) string {
+	var icon, badge string
+	if sess.IsToolSession() {
+		icon = toolIcon(sess.Kind, running)
+		badge = toolBadge(sess.Kind, running)
+	} else {
+		icon = sidebarIcon(m, state, running)
+		badge = sidebarBadge(state, running)
+	}
 
 	if i == m.cursor {
 		// Style label separately from icon so the icon keeps its own
@@ -114,6 +122,30 @@ func renderSidebarSession(m Model, i int, row sidebarRow, state tmux.State, runn
 	}
 
 	return NormalItem.PaddingLeft(4).Render(icon+" "+row.label) + badge
+}
+
+func toolIcon(kind string, running bool) string {
+	if !running {
+		return MutedItem.Render("○")
+	}
+	switch kind {
+	case "lazygit":
+		return lipgloss.NewStyle().Foreground(ColorSubtle).Render("⎇")
+	default: // editor
+		return lipgloss.NewStyle().Foreground(ColorSubtle).Render("✎")
+	}
+}
+
+func toolBadge(kind string, running bool) string {
+	if !running {
+		return MutedItem.Render("  stopped")
+	}
+	switch kind {
+	case "lazygit":
+		return MutedItem.Render("  lazygit")
+	default:
+		return MutedItem.Render("  editor")
+	}
 }
 
 func sidebarIcon(m Model, state tmux.State, running bool) string {

@@ -43,9 +43,13 @@ func NewSession(name, path string, dangerous bool) error {
 	return nil
 }
 
-func NewEditorSession(name, path, editor string) error {
+// NewToolSession starts a tmux session running an arbitrary command.
+// programArgs are appended after program (e.g. pass the path for editors;
+// leave empty for tools like lazygit that use the working directory).
+func NewToolSession(name, path, program string, programArgs ...string) error {
 	expanded := ExpandPath(path)
-	args := []string{"new-session", "-d", "-s", name, "-c", expanded, editor, expanded}
+	args := []string{"new-session", "-d", "-s", name, "-c", expanded, program}
+	args = append(args, programArgs...)
 	cmd := exec.Command("tmux", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
