@@ -39,7 +39,6 @@ var activityFrames = []string{
 
 func renderRightPanel(m Model) string {
 	innerH := m.height - 3
-	panelW := m.dashW + 2
 
 	onOverview := m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].typ == rowTypeOverview
 
@@ -54,10 +53,14 @@ func renderRightPanel(m Model) string {
 
 	// Hard-clip before handing to the border so it can never grow the layout.
 	content = clipLines(content, innerH)
+	// Pre-pad each line to the exact content width using ANSI-aware measurement
+	// so lipgloss doesn't need to normalise widths itself. Width normalisation
+	// runs ANSI sequences through truncation logic that can strip colours from
+	// captured tmux pane output.
+	content = padLinesToWidth(strings.TrimRight(content, "\n"), m.dashW)
 	return InactiveBorder.
-		Width(panelW).
 		Height(innerH).
-		Render(strings.TrimRight(content, "\n"))
+		Render(content)
 }
 
 func renderOverview(m Model, w, h int) string {
@@ -267,18 +270,17 @@ func renderSessionPreview(m Model, row sidebarRow, w, h int) string {
 		return lipgloss.NewStyle().Padding(1, 2).Render(MutedItem.Render("no output yet"))
 	}
 
-	// tmux pads every captured line to the full pane width (which can be much
-	// wider than our preview panel). Strip trailing spaces and truncate to w so
-	// lines never wrap inside the panel and inflate its visual height.
+	// Strip trailing spaces from each line (tmux pads to pane width).
+	// Don't byte-truncate — that breaks ANSI escape sequences.
+	// Take the last h lines so we always show the most recent output.
 	rawLines := strings.Split(pane, "\n")
 	for i, line := range rawLines {
-		line = strings.TrimRight(line, " ")
-		if len(line) > w {
-			line = line[:w]
-		}
-		rawLines[i] = line
+		rawLines[i] = strings.TrimRight(line, " ")
 	}
-	return clipLines(strings.Join(rawLines, "\n"), h)
+	if len(rawLines) > h {
+		rawLines = rawLines[len(rawLines)-h:]
+	}
+	return strings.Join(rawLines, "\n")
 }
 
 func renderProjectPreview(m Model, row sidebarRow, w, h int) string {
@@ -391,6 +393,21 @@ func renderCard(m Model, c cardData) string {
 	}
 
 	return border.Width(cardContentW).Height(cardContentH).Render(content)
+}
+
+// padLinesToWidth pads each line to exactly w visible characters using
+// lipgloss.Width for ANSI-aware measurement, so that the outer container
+// never needs to truncate lines (which can corrupt embedded ANSI sequences).
+// Lines already at or above w are left as-is.
+func padLinesToWidth(content string, w int) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		vis := lipgloss.Width(line)
+		if vis < w {
+			lines[i] = line + strings.Repeat(" ", w-vis)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func min(a, b int) int {

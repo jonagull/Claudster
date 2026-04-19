@@ -154,9 +154,10 @@ func capturePane(session string) string {
 	return string(out)
 }
 
-// CapturePaneOutput returns the last n lines of a session's active pane as plain text.
+// CapturePaneOutput returns the last n lines of a session's active pane,
+// including ANSI color/style escape sequences.
 func CapturePaneOutput(session string, lines int) string {
-	out, err := exec.Command("tmux", "capture-pane", "-t", session, "-p",
+	out, err := exec.Command("tmux", "capture-pane", "-t", session, "-p", "-e",
 		"-S", fmt.Sprintf("-%d", lines)).Output()
 	if err != nil {
 		return ""
