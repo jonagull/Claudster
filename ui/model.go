@@ -46,6 +46,7 @@ const (
 	modalNone             modalMode = iota
 	modalNewProject                 // N
 	modalNewSession                 // n
+	modalResumeSession              // r
 	modalNewEditorSession           // V / G / T
 	modalConfirmDelete              // d
 	modalHelp                       // ?
@@ -381,6 +382,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		return m.startNewSession(), nil
 
+	case "r":
+		return m.startResumeSession(), nil
+
 	case "N":
 		return m.startNewProject(), nil
 
@@ -548,6 +552,24 @@ func (m Model) startNewSession() Model {
 	}
 	gi, pi := row.groupIdx, row.projectIdx
 	m.modal.mode = modalNewSession
+	m.modal.targetGroup = m.config.Groups[gi].Name
+	m.modal.targetProject = m.config.Groups[gi].Projects[pi].Name
+	m.modal.input.Placeholder = "e.g. auth-refactor"
+	m.modal.input.SetValue("")
+	m.modal.input.Focus()
+	return m
+}
+
+func (m Model) startResumeSession() Model {
+	if m.cursor >= len(m.rows) {
+		return m
+	}
+	row := m.rows[m.cursor]
+	if row.typ == rowTypeGroup {
+		return m
+	}
+	gi, pi := row.groupIdx, row.projectIdx
+	m.modal.mode = modalResumeSession
 	m.modal.targetGroup = m.config.Groups[gi].Name
 	m.modal.targetProject = m.config.Groups[gi].Projects[pi].Name
 	m.modal.input.Placeholder = "e.g. auth-refactor"
@@ -999,6 +1021,46 @@ func (m Model) handleModalEnter() (tea.Model, tea.Cmd) {
 
 		return m, switchOrAttach(name)
 
+	case modalResumeSession:
+		name := val
+		if m.allSessionNames()[name] {
+			m.setStatus(fmt.Sprintf("session %q already exists — names must be unique", name))
+			return m, nil
+		}
+		var proj *store.Project
+		for gi := range m.config.Groups {
+			if m.config.Groups[gi].Name == m.modal.targetGroup {
+				for pi := range m.config.Groups[gi].Projects {
+					if m.config.Groups[gi].Projects[pi].Name == m.modal.targetProject {
+						proj = &m.config.Groups[gi].Projects[pi]
+					}
+				}
+			}
+		}
+		if proj == nil {
+			m.setStatus("project not found")
+			m.modal.mode = modalNone
+			return m, nil
+		}
+		if err := tmux.NewResumeSession(name, proj.PrimaryRepo(), m.dangerousMode); err != nil {
+			m.setStatus(fmt.Sprintf("error: %v", err))
+			m.modal.mode = modalNone
+			m.modal.input.Blur()
+			return m, nil
+		}
+		m.config.AddSession(m.modal.targetGroup, m.modal.targetProject, store.Session{Name: name})
+		store.Save(m.config)
+		m.modal.mode = modalNone
+		m.modal.input.Blur()
+		m.rebuildRows()
+		for i, r := range m.rows {
+			if r.typ == rowTypeSession && r.label == name {
+				m.cursor = i
+				break
+			}
+		}
+		return m, switchOrAttach(name)
+
 	case modalNewEditorSession:
 		name := val
 		if m.allSessionNames()[name] {
@@ -1135,6 +1197,7 @@ func renderHelpBar(m Model) string {
 	bindings := []struct{ key, desc string }{
 		{"enter", "attach"},
 		{"n", "new session"},
+		{"r", "resume"},
 		{"t/T", "terminal"},
 		{"v/V", "editor"},
 		{"G", "lazygit"},

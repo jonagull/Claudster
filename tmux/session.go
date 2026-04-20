@@ -43,6 +43,22 @@ func NewSession(name, path string, dangerous bool) error {
 	return nil
 }
 
+// NewResumeSession starts a tmux session running `claude --resume`, which
+// presents an interactive picker so the user can choose which conversation
+// to continue.
+func NewResumeSession(name, path string, dangerous bool) error {
+	args := []string{"new-session", "-d", "-s", name, "-c", ExpandPath(path), "claude", "--resume"}
+	if dangerous {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+	cmd := exec.Command("tmux", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
+}
+
 // NewToolSession starts a tmux session running an arbitrary command.
 // programArgs are appended after program (e.g. pass the path for editors;
 // leave empty for tools like lazygit that use the working directory).

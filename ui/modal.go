@@ -32,6 +32,14 @@ func renderModal(m Model) string {
 			hint += "  " + ErrorStyle.Render("⚠ --dangerously-skip-permissions")
 		}
 
+	case modalResumeSession:
+		title = fmt.Sprintf("Resume Session — %s", m.modal.targetProject)
+		fieldLabel = "Session name:"
+		hint = "opens claude --resume picker in " + primaryRepoHint(m)
+		if m.dangerousMode {
+			hint += "  " + ErrorStyle.Render("⚠ --dangerously-skip-permissions")
+		}
+
 	case modalNewEditorSession:
 		if m.modal.targetKind == "lazygit" {
 			title = fmt.Sprintf("New Lazygit Session — %s", m.modal.targetProject)
@@ -73,6 +81,7 @@ func renderHelp(m Model) string {
 		{"Sessions", []binding{
 			{"enter", "attach or start session"},
 			{"n", "new Claude session"},
+			{"r", "resume Claude session (picker)"},
 			{"T", "new terminal session (persistent)"},
 			{"V", "new editor session (persistent)"},
 			{"d", "delete session (confirm required)"},
