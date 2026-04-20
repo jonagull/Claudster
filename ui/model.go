@@ -97,6 +97,9 @@ type Model struct {
 
 	status    string
 	statusExp time.Time
+
+	toasts         []toast
+	tmuxBoundCount int // how many Alt+N tmux keys are currently bound
 }
 
 type tickMsg time.Time
@@ -216,15 +219,29 @@ func (m *Model) clampCursor() {
 }
 
 func (m *Model) pollMonitor() {
-	var names []string
+	var allNames []string
+	var claudeNames []string
 	for _, g := range m.config.Groups {
 		for _, p := range g.Projects {
 			for _, s := range p.Sessions {
-				names = append(names, s.Name)
+				allNames = append(allNames, s.Name)
+				if !s.IsToolSession() {
+					claudeNames = append(claudeNames, s.Name)
+				}
 			}
 		}
 	}
-	m.monitor.Poll(names)
+	// Snapshot Claude session statuses before polling to detect Working→Done transitions.
+	prev := make(map[string]tmux.Status, len(claudeNames))
+	for _, n := range claudeNames {
+		prev[n] = m.monitor.Get(n).Status
+	}
+	m.monitor.Poll(allNames)
+	for _, n := range claudeNames {
+		if prev[n] == tmux.StatusWorking && m.monitor.Get(n).Status == tmux.StatusDone {
+			m.addToast(n)
+		}
+	}
 }
 
 const defaultSidebarW = 32
@@ -279,6 +296,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinFrame = (m.spinFrame + 1) % len(spinner)
 		m.spinTick++
 		m.pollMonitor()
+		m.tickToasts()
 		cmds := []tea.Cmd{tick()}
 		if m.spinTick == 1 || m.spinTick%20 == 0 { // first tick, then every ~10 s
 			cmds = append(cmds, func() tea.Msg {
@@ -421,6 +439,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.config.UI.SidebarWidth = w
 		m.recalcLayout()
 		store.Save(m.config)
+
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		idx := int(msg.String()[0] - '1')
+		if idx < len(m.toasts) {
+			name := m.jumpToToast(idx)
+			if name != "" {
+				return m, switchOrAttach(name)
+			}
+		}
 	}
 
 	return m, nil
@@ -1046,7 +1073,20 @@ func (m Model) View() string {
 	sidebar := renderSidebar(m)
 	right := renderRightPanel(m)
 	main := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, right)
-	return lipgloss.JoinVertical(lipgloss.Left, main, renderHelpBar(m))
+	view := lipgloss.JoinVertical(lipgloss.Left, main, renderHelpBar(m))
+
+	if len(m.toasts) > 0 {
+		panel := renderAllToasts(m)
+		panelH := strings.Count(panel, "\n") + 1
+		// Position flush to the right edge, above the help bar.
+		x := m.width - toastOuterW
+		y := m.height - 1 - panelH
+		if x >= 0 && y >= 0 {
+			view = overlayStrings(view, panel, x, y)
+		}
+	}
+
+	return view
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────
