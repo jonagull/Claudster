@@ -31,6 +31,13 @@ func (p *Project) PrimaryRepo() string {
 	return p.Repos[0]
 }
 
+func (p *Project) AdditionalRepos() []string {
+	if len(p.Repos) <= 1 {
+		return nil
+	}
+	return p.Repos[1:]
+}
+
 type Group struct {
 	Name     string    `yaml:"name"`
 	Projects []Project `yaml:"projects"`

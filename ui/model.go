@@ -510,7 +510,7 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		if !tmux.SessionExists(row.label) {
 			// Start then attach
 			proj := &m.config.Groups[row.groupIdx].Projects[row.projectIdx]
-			if err := tmux.NewSession(row.label, proj.PrimaryRepo(), m.dangerousMode); err != nil {
+			if err := tmux.NewSession(row.label, proj.PrimaryRepo(), proj.AdditionalRepos(), m.dangerousMode); err != nil {
 				m.setStatus(fmt.Sprintf("error starting session: %v", err))
 				return m, nil
 			}
@@ -999,7 +999,7 @@ func (m Model) handleModalEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if err := tmux.NewSession(name, proj.PrimaryRepo(), m.dangerousMode); err != nil {
+		if err := tmux.NewSession(name, proj.PrimaryRepo(), proj.AdditionalRepos(), m.dangerousMode); err != nil {
 			m.setStatus(fmt.Sprintf("error: %v", err))
 			m.modal.mode = modalNone
 			m.modal.input.Blur()
@@ -1042,7 +1042,7 @@ func (m Model) handleModalEnter() (tea.Model, tea.Cmd) {
 			m.modal.mode = modalNone
 			return m, nil
 		}
-		if err := tmux.NewResumeSession(name, proj.PrimaryRepo(), m.dangerousMode); err != nil {
+		if err := tmux.NewResumeSession(name, proj.PrimaryRepo(), proj.AdditionalRepos(), m.dangerousMode); err != nil {
 			m.setStatus(fmt.Sprintf("error: %v", err))
 			m.modal.mode = modalNone
 			m.modal.input.Blur()

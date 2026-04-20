@@ -30,8 +30,11 @@ func ListSessions() ([]string, error) {
 	return strings.Split(raw, "\n"), nil
 }
 
-func NewSession(name, path string, dangerous bool) error {
+func NewSession(name, path string, additionalRepos []string, dangerous bool) error {
 	args := []string{"new-session", "-d", "-s", name, "-c", ExpandPath(path), "claude"}
+	for _, r := range additionalRepos {
+		args = append(args, "--add-dir", ExpandPath(r))
+	}
 	if dangerous {
 		args = append(args, "--dangerously-skip-permissions")
 	}
@@ -46,8 +49,11 @@ func NewSession(name, path string, dangerous bool) error {
 // NewResumeSession starts a tmux session running `claude --resume`, which
 // presents an interactive picker so the user can choose which conversation
 // to continue.
-func NewResumeSession(name, path string, dangerous bool) error {
+func NewResumeSession(name, path string, additionalRepos []string, dangerous bool) error {
 	args := []string{"new-session", "-d", "-s", name, "-c", ExpandPath(path), "claude", "--resume"}
+	for _, r := range additionalRepos {
+		args = append(args, "--add-dir", ExpandPath(r))
+	}
 	if dangerous {
 		args = append(args, "--dangerously-skip-permissions")
 	}
