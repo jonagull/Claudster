@@ -1,0 +1,22 @@
+# claudster config — edit this file to add your projects
+# press N in claudster to add a project interactively
+# press e to open this file at any time
+#
+# structure:
+#   groups contain projects
+#   projects contain repos and sessions
+#   sessions are individual Claude conversations
+
+groups:
+  - name: work
+    projects:
+      - name: my-project
+        repos:
+          - ~/code/my-project   # change this to your repo path
+        sessions: []
+
+# ui settings (optional)
+ui:
+  sidebar_width: 32
+  # editor: code       # uncomment and set your editor: code, nvim, vim, nano
+  # git_client: lazygit  # or github-desktop
