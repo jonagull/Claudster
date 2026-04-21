@@ -25,5 +25,15 @@ groups:
           - name: dotfiles
 
 # optional UI tweaks
+#
+# editor options:
+#   "code"   - VS Code (make sure 'code' is on your PATH)
+#              WSL: install the "Remote - WSL" extension, then run
+#              `code` once from your terminal to register it on the PATH
+#   "nvim"   - Neovim
+#   "vim"    - Vim
+#   "nano"   - Nano (good default for WSL if you don't have a preference)
+#   ""       - auto-detect: checks $EDITOR, then code → nano → vim → vi
 ui:
   sidebar_width: 32   # use [ and ] to resize at runtime; saved here automatically
+  editor: ""

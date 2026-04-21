@@ -44,7 +44,8 @@ type Group struct {
 }
 
 type UI struct {
-	SidebarWidth int `yaml:"sidebar_width,omitempty"`
+	SidebarWidth int    `yaml:"sidebar_width,omitempty"`
+	Editor       string `yaml:"editor,omitempty"`
 }
 
 type Config struct {

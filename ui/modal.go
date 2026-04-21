@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -26,7 +27,7 @@ func renderModal(m Model) string {
 	case modalNewProject:
 		title = "New Project"
 		fieldLabel = "Group:"
-		hint = "tab to autocomplete  ·  template opens in " + resolveEditor()
+		hint = "tab to autocomplete  ·  template opens in " + resolveEditor(m.config.UI.Editor)
 
 	case modalNewSession:
 		title = fmt.Sprintf("New Session — %s", m.modal.targetProject)
@@ -50,7 +51,7 @@ func renderModal(m Model) string {
 			hint = "opens lazygit in " + primaryRepoHint(m)
 		} else {
 			title = fmt.Sprintf("New Editor Session — %s", m.modal.targetProject)
-			hint = "opens " + resolveEditor() + " in " + primaryRepoHint(m)
+			hint = "opens " + resolveEditor(m.config.UI.Editor) + " in " + primaryRepoHint(m)
 		}
 		fieldLabel = "Session name:"
 	}
@@ -189,16 +190,27 @@ func renderDangerousConfirm(m Model) string {
 	)
 }
 
-func resolveEditor() string {
+// resolveEditor returns the editor to use, checking (in order):
+// config ui.editor → $EDITOR env → auto-detect from PATH.
+func resolveEditor(configured string) string {
+	if configured != "" {
+		return configured
+	}
 	if e := os.Getenv("EDITOR"); e != "" {
 		return e
 	}
-	for _, e := range []string{"nano", "vim", "vi"} {
+	for _, e := range []string{"code", "code-insiders", "nano", "vim", "vi"} {
 		if _, err := exec.LookPath(e); err == nil {
 			return e
 		}
 	}
 	return "vi"
+}
+
+// isVSCode reports whether the editor binary is VS Code.
+func isVSCode(editor string) bool {
+	base := filepath.Base(editor)
+	return base == "code" || base == "code-insiders"
 }
 
 func primaryRepoHint(m Model) string {

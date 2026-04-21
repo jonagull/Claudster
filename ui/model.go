@@ -419,8 +419,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "e":
-		editor := resolveEditor()
-		cmd := exec.Command(editor, store.ConfigPath())
+		editor := resolveEditor(m.config.UI.Editor)
+		var cmd *exec.Cmd
+		if isVSCode(editor) {
+			cmd = exec.Command(editor, "--wait", store.ConfigPath())
+		} else {
+			cmd = exec.Command(editor, store.ConfigPath())
+		}
 		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 			return editorDoneMsg{}
 		})
@@ -703,8 +708,14 @@ func (m Model) openInEditor() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	path := tmux.ExpandPath(primaryRepo)
-	editor := resolveEditor()
-	cmd := exec.Command(editor, path)
+	editor := resolveEditor(m.config.UI.Editor)
+	var cmd *exec.Cmd
+	if isVSCode(editor) {
+		// Open folder in VS Code without --wait so claudster stays running.
+		cmd = exec.Command(editor, "--new-window", path)
+	} else {
+		cmd = exec.Command(editor, path)
+	}
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return editorDoneMsg{}
 	})
@@ -982,8 +993,15 @@ func (m Model) handleModalEnter() (tea.Model, tea.Cmd) {
 			m.setStatus(fmt.Sprintf("error: %v", err))
 			return m, nil
 		}
-		editor := resolveEditor()
-		editorCmd := exec.Command(editor, fmt.Sprintf("+%d", line), store.ConfigPath())
+		editor := resolveEditor(m.config.UI.Editor)
+		var editorCmd *exec.Cmd
+		if isVSCode(editor) {
+			// VS Code uses --goto file:line syntax; --wait so we reload after edits.
+			editorCmd = exec.Command(editor, "--wait", "--goto",
+				fmt.Sprintf("%s:%d", store.ConfigPath(), line))
+		} else {
+			editorCmd = exec.Command(editor, fmt.Sprintf("+%d", line), store.ConfigPath())
+		}
 		return m, tea.ExecProcess(editorCmd, func(err error) tea.Msg {
 			return editorDoneMsg{}
 		})
@@ -1032,7 +1050,13 @@ func (m Model) handleModalEnter() (tea.Model, tea.Cmd) {
 			}
 			startErr = tmux.NewToolSession(name, proj.PrimaryRepo(), shell)
 		default: // "editor"
-			editor := resolveEditor()
+			editor := resolveEditor(m.config.UI.Editor)
+			if isVSCode(editor) {
+				m.setStatus("VS Code doesn't run inside tmux — use v to open the folder instead")
+				m.modal.mode = modalNone
+				m.modal.input.Blur()
+				return m, nil
+			}
 			startErr = tmux.NewToolSession(name, proj.PrimaryRepo(), editor, tmux.ExpandPath(proj.PrimaryRepo()))
 		}
 		if startErr != nil {
