@@ -11,17 +11,17 @@ A terminal UI for managing multiple Claude sessions across projects.
 
 ## Installation
 
-Download the binary for your platform from the [releases page](../../releases) and put it on your PATH:
+Download the binary for your platform from the [releases page](../../releases) and put it on your PATH.
 
 ```bash
 # macOS (Apple Silicon)
-curl -L https://github.com/yourname/claudster/releases/latest/download/claudster-darwin-arm64 -o claudster
+curl -L https://github.com/jonathangulliksen/claudster/releases/latest/download/claudster-darwin-arm64 -o claudster
 
 # macOS (Intel)
-curl -L https://github.com/yourname/claudster/releases/latest/download/claudster-darwin-amd64 -o claudster
+curl -L https://github.com/jonathangulliksen/claudster/releases/latest/download/claudster-darwin-amd64 -o claudster
 
 # Linux / WSL
-curl -L https://github.com/yourname/claudster/releases/latest/download/claudster-linux-amd64 -o claudster
+curl -L https://github.com/jonathangulliksen/claudster/releases/latest/download/claudster-linux-amd64 -o claudster
 
 chmod +x claudster
 sudo mv claudster /usr/local/bin/
