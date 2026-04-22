@@ -17,7 +17,13 @@ func renderSidebar(m Model) string {
 	if m.dangerousMode {
 		title += "  " + ErrorStyle.Render("⚠ bypass")
 	}
-	header := lipgloss.NewStyle().Padding(0, 1).Render(title)
+	var header string
+	if m.searchMode {
+		prompt := HelpKey.Render("/") + " " + NormalItem.Render(m.searchStr) + MutedItem.Render("█")
+		header = lipgloss.NewStyle().Padding(0, 1).Render(prompt)
+	} else {
+		header = lipgloss.NewStyle().Padding(0, 1).Render(title)
+	}
 
 	var lines []string
 
@@ -51,11 +57,15 @@ func renderSidebar(m Model) string {
 				if i > 0 {
 					lines = append(lines, "")
 				}
-				lines = append(lines, lipgloss.NewStyle().
-					Foreground(ColorSubtle).
-					Bold(true).
-					PaddingLeft(1).
-					Render(row.label))
+				arrow := "▼"
+				if m.groupCollapsed[row.groupIdx] {
+					arrow = "▶"
+				}
+				groupStyle := lipgloss.NewStyle().Foreground(ColorSubtle).Bold(true).PaddingLeft(1)
+				if i == m.cursor {
+					groupStyle = groupStyle.Foreground(ColorPrimary)
+				}
+				lines = append(lines, groupStyle.Render(arrow+" "+row.label))
 				prevWasGroup = true
 
 			case rowTypeProject:
@@ -70,7 +80,7 @@ func renderSidebar(m Model) string {
 				if !m.expanded[key] && len(proj.Sessions) > 0 {
 					running := 0
 					for _, s := range proj.Sessions {
-						if tmux.SessionExists(s.Name) {
+						if m.monitor.Exists(s.Name) {
 							running++
 						}
 					}
@@ -86,9 +96,34 @@ func renderSidebar(m Model) string {
 
 			case rowTypeSession:
 				state := m.monitor.Get(row.label)
-				running := tmux.SessionExists(row.label)
+				running := m.monitor.Exists(row.label)
 				sess := m.config.Groups[row.groupIdx].Projects[row.projectIdx].Sessions[row.sessionIdx]
 				lines = append(lines, renderSidebarSession(m, i, row, sess, state, running))
+
+			case rowTypeSkillsHeader:
+				lines = append(lines, "")
+				lines = append(lines, lipgloss.NewStyle().
+					Foreground(ColorSubtle).
+					Bold(true).
+					PaddingLeft(1).
+					Render("skills"))
+
+			case rowTypeSkillScope:
+				label := "▸ " + row.label
+				if i == m.cursor {
+					lines = append(lines, SelectedItem.PaddingLeft(2).Render(label))
+				} else {
+					lines = append(lines, MutedItem.PaddingLeft(2).Render(label))
+				}
+
+			case rowTypeSkill:
+				icon := lipgloss.NewStyle().Foreground(ColorSecondary).Render("✦")
+				if i == m.cursor {
+					lines = append(lines, lipgloss.NewStyle().PaddingLeft(4).Render(
+						icon+" "+SelectedItem.Render(row.label)))
+				} else {
+					lines = append(lines, NormalItem.PaddingLeft(4).Render(icon+" "+row.label))
+				}
 			}
 		}
 	}
@@ -158,7 +193,9 @@ func sidebarIcon(m Model, state tmux.State, running bool) string {
 	}
 	switch state.Status {
 	case tmux.StatusWorking:
-		return WorkingBadge.Render(spinner[m.spinFrame])
+		frame := m.spinFrame % len(spinner)
+		color := workingPalette[m.spinFrame%len(workingPalette)]
+		return lipgloss.NewStyle().Foreground(color).Bold(true).Render(spinner[frame])
 	case tmux.StatusDone:
 		return DoneBadge.Render("✓")
 	default:
