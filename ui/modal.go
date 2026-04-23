@@ -10,9 +10,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"claudster/skills"
+	"claudster/tmux"
 )
 
 func renderModal(m Model) string {
+	if m.modal.mode == modalSessionPicker {
+		return renderSessionPicker(m)
+	}
+	if m.modal.mode == modalContextMenu {
+		return renderContextMenu(m)
+	}
 	if m.modal.mode == modalConfirmDelete {
 		return renderConfirmDelete(m)
 	}
@@ -21,6 +28,9 @@ func renderModal(m Model) string {
 	}
 	if m.modal.mode == modalHelp {
 		return renderHelp(m)
+	}
+	if m.modal.mode == modalSkillsInfo {
+		return renderSkillsInfo(m)
 	}
 	if m.modal.mode == modalScratchAppend {
 		return renderScratchAppend(m)
@@ -102,11 +112,14 @@ func renderHelp(m Model) string {
 			{"j / ↓", "move down"},
 			{"k / ↑", "move up"},
 			{"ctrl+d / ctrl+u", "jump 5 rows down / up"},
+			{"ctrl+p", "global session picker"},
 			{"/", "search — jump to match as you type"},
+			{"o", "go to overview"},
 			{"space", "expand / collapse project"},
 		}},
 		{"Sessions", []binding{
 			{"enter", "attach or start session"},
+			{"m", "context menu (attach / restart / delete)"},
 			{"n", "new Claude session"},
 			{"r", "resume Claude session (picker)"},
 			{"c", "scroll output (vim copy mode)"},
@@ -130,6 +143,7 @@ func renderHelp(m Model) string {
 			{"a", "new skill (in current scope)"},
 			{"enter / v", "edit skill in editor"},
 			{"d", "delete skill"},
+			{"i", "what are skills? (reference)"},
 		}},
 		{"UI", []binding{
 			{"[ / ]", "resize sidebar"},
@@ -172,6 +186,64 @@ func renderHelp(m Model) string {
 	rows = append(rows, HelpDesc.Render("esc  close"))
 
 	body := strings.Join(rows, "\n")
+	return lipgloss.Place(m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		OverlayStyle.Render(body),
+	)
+}
+
+func renderSkillsInfo(m Model) string {
+	h := func(text string) string { return PreviewKey.Render(text) }
+	b := func(text string) string { return HelpDesc.Render(text) }
+	c := func(text string) string { return PreviewComment.Render(text) }
+	key := func(k, desc string) string {
+		return HelpKey.Render(k) + HelpSep.Render("  ") + HelpDesc.Render(desc)
+	}
+	code := func(text string) string {
+		return lipgloss.NewStyle().Foreground(ColorSecondary).Render(text)
+	}
+	globalDir := skills.GlobalDir()
+
+	lines := []string{
+		OverlayTitle.Render("What are Skills?"),
+		"",
+		b("Skills teach Claude how to do specific things — they are Markdown files that"),
+		b("Claude reads before responding. Think of them as reusable instructions or"),
+		b("playbooks that live in your filesystem, not inside any conversation."),
+		"",
+		h("Where skills live"),
+		code("  ~/.claude/skills/<name>/SKILL.md") + c("  ← global (all projects)"),
+		code("  <repo>/.claude/skills/<name>/SKILL.md") + c("  ← project-specific"),
+		b("  Current global dir: " + globalDir),
+		"",
+		h("SKILL.md format"),
+		code("  ---"),
+		code("  name: git-commit"),
+		code("  description: Write conventional commit messages."),
+		code("  ---"),
+		"",
+		code("  # Instructions for Claude"),
+		code("  When writing commit messages, use the format: type(scope): summary"),
+		"",
+		b("  The description field tells Claude when to load this skill automatically."),
+		b("  The body is the actual instructions — plain Markdown, any length."),
+		"",
+		h("How Claude uses them"),
+		b("  · Claude sees all skill descriptions at session start (low cost)."),
+		b("  · It loads a skill's full content when it's relevant to the task."),
+		b("  · You can also invoke one manually: type /skill-name in Claude."),
+		b("  · Loaded skills persist for the whole session, even after compaction."),
+		"",
+		h("Managing skills here"),
+		"  " + key("a", "new skill — creates <scope>/<name>/SKILL.md and opens it"),
+		"  " + key("enter / v", "edit an existing skill in your editor"),
+		"  " + key("d", "delete a skill (confirm required)"),
+		"  " + key("i", "this page"),
+		"",
+		HelpDesc.Render("esc  close"),
+	}
+
+	body := strings.Join(lines, "\n")
 	return lipgloss.Place(m.width, m.height,
 		lipgloss.Center, lipgloss.Center,
 		OverlayStyle.Render(body),
@@ -232,6 +304,116 @@ func renderDangerousConfirm(m Model) string {
 		HelpDesc.Render("Skips permission prompts. Only use if you trust the codebase."),
 		"",
 		HelpKey.Render("y")+" "+HelpDesc.Render("yes    ")+HelpKey.Render("n / enter")+" "+HelpDesc.Render("no    ")+HelpKey.Render("esc")+" "+HelpDesc.Render("cancel"),
+	)
+	return lipgloss.Place(m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		OverlayStyle.Render(body),
+	)
+}
+
+func renderSessionPicker(m Model) string {
+	entries := filterPickerEntries(m.allPickerEntries(), m.modal.pickerQuery)
+
+	prompt := HelpKey.Render("  ⌕  ") + NormalItem.Render(m.modal.pickerQuery) + MutedItem.Render("█")
+
+	const maxVisible = 12
+	var resultLines []string
+	if len(entries) == 0 {
+		resultLines = append(resultLines, MutedItem.PaddingLeft(2).Render("no sessions match"))
+	} else {
+		start := 0
+		if m.modal.pickerCursor >= maxVisible {
+			start = m.modal.pickerCursor - maxVisible + 1
+		}
+		end := start + maxVisible
+		if end > len(entries) {
+			end = len(entries)
+		}
+		for i := start; i < end; i++ {
+			e := entries[i]
+			running := m.monitor.Exists(e.sessionName)
+			state := m.monitor.Get(e.sessionName)
+
+			var icon string
+			if !running {
+				icon = MutedItem.Render("○")
+			} else if state.Status == tmux.StatusWorking {
+				icon = WorkingBadge.Render("●")
+			} else if state.Status == tmux.StatusDone {
+				icon = DoneBadge.Render("✓")
+			} else {
+				icon = NormalItem.Render("─")
+			}
+
+			meta := MutedItem.Render(" · " + e.projectName + " · " + e.groupName)
+			if i == m.modal.pickerCursor {
+				resultLines = append(resultLines, lipgloss.NewStyle().PaddingLeft(2).Render(
+					icon+"  "+SelectedItem.Render(e.sessionName)+meta,
+				))
+			} else {
+				resultLines = append(resultLines, lipgloss.NewStyle().PaddingLeft(2).Render(
+					icon+"  "+NormalItem.Render(e.sessionName)+meta,
+				))
+			}
+		}
+	}
+
+	divider := MutedItem.Render(strings.Repeat("─", 48))
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		prompt,
+		divider,
+		strings.Join(resultLines, "\n"),
+		"",
+		HelpDesc.Render("  ↑/↓  navigate    enter  attach    esc  close"),
+	)
+
+	return lipgloss.Place(m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		OverlayStyle.Render(body),
+	)
+}
+
+func renderContextMenu(m Model) string {
+	name := m.modal.pendingName
+	running := m.monitor.Exists(name)
+	state := m.monitor.Get(name)
+
+	var statusLine string
+	if !running {
+		statusLine = MutedItem.Render("○  stopped")
+	} else {
+		switch state.Status {
+		case tmux.StatusWorking:
+			statusLine = WorkingBadge.Render("●  working")
+		case tmux.StatusDone:
+			statusLine = DoneBadge.Render("✓  done")
+		default:
+			statusLine = MutedItem.Render("─  idle")
+		}
+	}
+
+	sep := func(key, desc string) string {
+		return HelpKey.Render(key) + HelpSep.Render("  ") + HelpDesc.Render(desc)
+	}
+	errSep := func(key, desc string) string {
+		return ErrorStyle.Render(key) + HelpSep.Render("  ") + HelpDesc.Render(desc)
+	}
+
+	var opts []string
+	opts = append(opts, sep("enter", "attach to session"))
+	if running {
+		opts = append(opts, sep("c", "scroll output (copy mode)"))
+		opts = append(opts, sep("P", "restart session"))
+	}
+	opts = append(opts, errSep("d", "delete session"))
+
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		OverlayTitle.Render(name),
+		statusLine,
+		"",
+		strings.Join(opts, "\n"),
+		"",
+		HelpDesc.Render("esc  close"),
 	)
 	return lipgloss.Place(m.width, m.height,
 		lipgloss.Center, lipgloss.Center,

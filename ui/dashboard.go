@@ -45,8 +45,13 @@ func renderRightPanel(m Model) string {
 
 	var content string
 	if onOverview {
-		content = clipLines(renderOverview(m, m.dashW, innerH), innerH)
+		rendered := renderOverview(m, m.dashW, innerH)
+		if m.dashScrollOffset > 0 {
+			rendered = skipLines(rendered, m.dashScrollOffset)
+		}
+		content = clipLines(rendered, innerH)
 	} else {
+		m.dashScrollOffset = 0 // reset when leaving overview
 		header := lipgloss.NewStyle().Padding(0, 1).Render(InactivePanelTitle.Render("preview"))
 		preview := clipLines(renderPreviewSection(m, m.dashW, innerH-1), innerH-1)
 		content = lipgloss.JoinVertical(lipgloss.Left, header, preview)
@@ -315,26 +320,47 @@ func renderProjectPreview(m Model, row sidebarRow, w, h int) string {
 		}
 	}
 
-	running := 0
-	for _, s := range proj.Sessions {
-		if m.monitor.Exists(s.Name) {
-			running++
+	lines = append(lines, "")
+	if len(proj.Sessions) == 0 {
+		lines = append(lines, MutedItem.Render("  press n to start a session"))
+	} else {
+		lines = append(lines, PreviewKey.Render("sessions:"))
+		for _, s := range proj.Sessions {
+			running := m.monitor.Exists(s.Name)
+			state := m.monitor.Get(s.Name)
+			var icon string
+			if !running {
+				icon = MutedItem.Render("○")
+			} else if state.Status == tmux.StatusWorking {
+				icon = WorkingBadge.Render("●")
+			} else if state.Status == tmux.StatusDone {
+				icon = DoneBadge.Render("✓")
+			} else {
+				icon = NormalItem.Render("─")
+			}
+			lines = append(lines, "  "+icon+" "+NormalItem.Render(s.Name))
 		}
 	}
 
-	stopped := len(proj.Sessions) - running
-	lines = append(lines, "")
-	lines = append(lines, kv("sessions",
-		DoneBadge.Render(strings.Repeat("●", running))+
-			MutedItem.Render(strings.Repeat("○", stopped)),
-	))
-
-	if len(proj.Sessions) == 0 {
-		lines = append(lines, "")
-		lines = append(lines, MutedItem.Render("  press n to start a session"))
-	}
-
 	return lipgloss.NewStyle().Padding(0, 2).Render(strings.Join(lines, "\n"))
+}
+
+// ProjectPreviewSessionY returns the screen Y of the first session name in the
+// project preview, and how many sessions follow, so click hit-testing can work.
+// Layout: right border(1) + header(1) + padding(1) + project(1) + group(1) + repos(N) + blank(1) + "sessions:"(1) = fixed offset
+func projectPreviewSessionOffset(proj store.Project) int {
+	// 1 border + 1 header + 1 padding-top (Padding(0,2) adds 0 vertical) +
+	// project + group + blank-before-repos +
+	// repos block + blank + "sessions:" label
+	offset := 1 + 1 + 1 // border + header + 1-based click offset
+	offset += 1         // "project:" line
+	offset += 1         // "group:" line
+	if len(proj.Repos) > 0 {
+		offset += 1 + len(proj.Repos) // "repos:" + each repo
+	}
+	offset += 1 // blank line
+	offset += 1 // "sessions:" label
+	return offset
 }
 
 func renderSkillPreview(row sidebarRow, w, h int) string {
@@ -390,10 +416,13 @@ func renderSkillsHeaderPreview(w, h int) string {
 	var lines []string
 	lines = append(lines, PreviewKey.Render("Skills"))
 	lines = append(lines, "")
-	lines = append(lines, MutedItem.Render("  Navigate to a scope and press a to create a skill."))
+	lines = append(lines, MutedItem.Render("  Skills are Markdown files that teach Claude how to do specific things."))
+	lines = append(lines, MutedItem.Render("  They live in your filesystem and load automatically when relevant."))
 	lines = append(lines, "")
-	lines = append(lines, MutedItem.Render("  Global skills live in ~/.claude/skills/"))
-	lines = append(lines, MutedItem.Render("  Project skills live in <repo>/.claude/skills/"))
+	lines = append(lines, MutedItem.Render("  Global skills  →  ~/.claude/skills/<name>/SKILL.md"))
+	lines = append(lines, MutedItem.Render("  Project skills →  <repo>/.claude/skills/<name>/SKILL.md"))
+	lines = append(lines, "")
+	lines = append(lines, HelpKey.Render("  i")+HelpDesc.Render("  full reference page    ")+HelpKey.Render("a")+HelpDesc.Render("  new skill"))
 	return lipgloss.NewStyle().Padding(0, 2).Render(strings.Join(lines, "\n"))
 }
 
@@ -490,6 +519,14 @@ func min(a, b int) int {
 }
 
 // clipLines truncates s to at most n lines (newline-separated).
+func skipLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if n >= len(lines) {
+		return ""
+	}
+	return strings.Join(lines[n:], "\n")
+}
+
 func clipLines(s string, n int) string {
 	if n <= 0 {
 		return ""

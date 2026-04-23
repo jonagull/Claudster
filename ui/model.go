@@ -74,6 +74,9 @@ const (
 	modalScratchAppend              // S — quick add to scratch
 	modalNewSkill                   // a on a skill scope/skill row
 	modalConfirmSkillDelete         // d on a skill row
+	modalSkillsInfo                 // i — what are skills?
+	modalContextMenu                // m on a session
+	modalSessionPicker              // ctrl+p global session picker
 )
 
 // modalNewProject only needs one step (group name); the rest is done in $EDITOR.
@@ -93,6 +96,9 @@ type modalState struct {
 	compIdx          int
 	step             int    // 0 = name input, 1 = dangerous mode confirm
 	pendingName      string // session name held between steps
+	// session picker fields
+	pickerQuery  string
+	pickerCursor int
 }
 
 func newModalState() modalState {
@@ -125,11 +131,12 @@ type Model struct {
 	skillsGlobal  []skills.Skill
 	skillsProject map[string][]skills.Skill // repoPath (expanded) → skills
 
-	sidebarW int
-	dashW    int
-	dashH    int
-	width    int
-	height   int
+	sidebarW       int
+	dashW          int
+	dashH          int
+	width          int
+	height         int
+	dashScrollOffset int
 
 	status    string
 	statusExp time.Time
@@ -212,7 +219,7 @@ func expandKey(gi, pi int) string {
 
 func (m *Model) rebuildRows() {
 	var rows []sidebarRow
-	yPos := 2 // Y=0 top border, Y=1 title, content from Y=2
+	yPos := 3 // Y=0 top border, Y=1 title, content from Y=2 (click events are 1-based so +1)
 
 	rows = append(rows, sidebarRow{
 		typ: rowTypeOverview, label: "overview",
@@ -501,10 +508,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleMouseClick(msg.X, msg.Y)
 			}
 		case tea.MouseButtonWheelUp:
-			m.moveUp()
+			if msg.X > m.sidebarW+2 {
+				m.dashScrollOffset -= 3
+				if m.dashScrollOffset < 0 {
+					m.dashScrollOffset = 0
+				}
+			} else {
+				m.moveUp()
+			}
 			return m, nil
 		case tea.MouseButtonWheelDown:
-			m.moveDown()
+			if msg.X > m.sidebarW+2 {
+				m.dashScrollOffset += 3
+			} else {
+				m.moveDown()
+			}
 			return m, nil
 		}
 
@@ -527,6 +545,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c", "ctrl+q":
 		return m, tea.Quit
+
+	case "ctrl+p":
+		m.modal.mode = modalSessionPicker
+		m.modal.pickerQuery = ""
+		m.modal.pickerCursor = 0
+		return m, nil
+
+	case "o":
+		m.cursor = 0
+		m.dashScrollOffset = 0
+		return m, nil
 
 	case "/":
 		m.searchMode = true
@@ -570,6 +599,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		return m.startConfirmDelete(), nil
 
+	case "m":
+		return m.openContextMenu(), nil
+
 	case "p":
 		m.dangerousMode = !m.dangerousMode
 
@@ -605,6 +637,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "?":
 		m.modal.mode = modalHelp
+		return m, nil
+
+	case "i":
+		m.modal.mode = modalSkillsInfo
 		return m, nil
 
 	case "e":
@@ -713,6 +749,7 @@ func (m *Model) moveDown() {
 	}
 	if next < len(m.rows) {
 		m.cursor = next
+		m.dashScrollOffset = 0
 	}
 }
 
@@ -723,6 +760,7 @@ func (m *Model) moveUp() {
 	}
 	if prev >= 0 {
 		m.cursor = prev
+		m.dashScrollOffset = 0
 	}
 }
 
@@ -1224,16 +1262,20 @@ func (m Model) handleMouseClick(x, y int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Dashboard area — hit-test against grouped card layout
-	targetName := m.hitTestDashboardCard(x, y)
+	// Dashboard area — route to the correct hit-test based on what's displayed.
+	onOverview := m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].typ == rowTypeOverview
+	var targetName string
+	if onOverview {
+		targetName = m.hitTestDashboardCard(x, y)
+	} else {
+		targetName = m.hitTestPreviewSession(y)
+	}
 	if targetName == "" {
 		return m, nil
 	}
+	// Single click always just moves the cursor — never attaches.
 	for i, r := range m.rows {
 		if r.typ == rowTypeSession && r.label == targetName {
-			if m.cursor == i {
-				return m.handleEnter()
-			}
 			m.cursor = i
 			return m, nil
 		}
@@ -1241,8 +1283,48 @@ func (m Model) handleMouseClick(x, y int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openContextMenu opens the context menu for the currently selected session.
+func (m Model) openContextMenu() Model {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return m
+	}
+	row := m.rows[m.cursor]
+	if row.typ != rowTypeSession {
+		return m
+	}
+	m.modal.mode = modalContextMenu
+	m.modal.pendingName = row.label
+	return m
+}
+
 // hitTestDashboardCard returns the session name for a click at (absX, absY),
 // mirroring the grouped geometry of renderOverview + renderCardGrid exactly.
+// hitTestPreviewSession returns a session name if the click Y lands on a session
+// row in the project preview panel (shown when cursor is on a project row).
+func (m Model) hitTestPreviewSession(absY int) string {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return ""
+	}
+	row := m.rows[m.cursor]
+	if row.typ != rowTypeProject {
+		return ""
+	}
+	proj := m.config.Groups[row.groupIdx].Projects[row.projectIdx]
+	if len(proj.Sessions) == 0 {
+		return ""
+	}
+	firstY := projectPreviewSessionOffset(proj)
+	// Allow ±1 tolerance for minor rendering offsets.
+	idx := absY - firstY
+	if idx < 0 {
+		idx = absY - (firstY - 1)
+	}
+	if idx < 0 || idx >= len(proj.Sessions) {
+		return ""
+	}
+	return proj.Sessions[idx].Name
+}
+
 func (m Model) hitTestDashboardCard(absX, absY int) string {
 	const colW = cardContentW + 4
 	const cardH = cardContentH + 2
@@ -1286,7 +1368,7 @@ func (m Model) hitTestDashboardCard(absX, absY int) string {
 			}
 		}
 	}
-	gridStartY := 1 + logoH + 1 + 1 + 1 // border + logo + blank + metrics + blank
+	gridStartY := 1 + 1 + logoH + 1 + 1 + 1 // 1-based offset + border + logo + blank + metrics + blank
 	if nWorking > 0 {
 		gridStartY += 2
 	}
@@ -1336,9 +1418,119 @@ func (m Model) hitTestDashboardCard(absX, absY int) string {
 	return ""
 }
 
+// ── session picker ────────────────────────────────────────────────────────────
+
+type pickerEntry struct {
+	sessionName string
+	projectName string
+	groupName   string
+}
+
+func (m Model) allPickerEntries() []pickerEntry {
+	var entries []pickerEntry
+	for _, g := range m.config.Groups {
+		for _, p := range g.Projects {
+			for _, s := range p.Sessions {
+				entries = append(entries, pickerEntry{
+					sessionName: s.Name,
+					projectName: p.Name,
+					groupName:   g.Name,
+				})
+			}
+		}
+	}
+	return entries
+}
+
+func filterPickerEntries(entries []pickerEntry, query string) []pickerEntry {
+	if query == "" {
+		return entries
+	}
+	q := strings.ToLower(query)
+	var out []pickerEntry
+	for _, e := range entries {
+		if strings.Contains(strings.ToLower(e.sessionName), q) ||
+			strings.Contains(strings.ToLower(e.projectName), q) ||
+			strings.Contains(strings.ToLower(e.groupName), q) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	entries := filterPickerEntries(m.allPickerEntries(), m.modal.pickerQuery)
+
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.modal.mode = modalNone
+	case "enter":
+		if m.modal.pickerCursor < len(entries) {
+			name := entries[m.modal.pickerCursor].sessionName
+			m.modal.mode = modalNone
+			for i, r := range m.rows {
+				if r.typ == rowTypeSession && r.label == name {
+					m.cursor = i
+					break
+				}
+			}
+			return m, switchOrAttach(name)
+		}
+	case "j", "down":
+		if m.modal.pickerCursor < len(entries)-1 {
+			m.modal.pickerCursor++
+		}
+	case "k", "up":
+		if m.modal.pickerCursor > 0 {
+			m.modal.pickerCursor--
+		}
+	case "backspace", "ctrl+h":
+		runes := []rune(m.modal.pickerQuery)
+		if len(runes) > 0 {
+			m.modal.pickerQuery = string(runes[:len(runes)-1])
+			m.modal.pickerCursor = 0
+		}
+	default:
+		if len(msg.Runes) > 0 {
+			m.modal.pickerQuery += string(msg.Runes)
+			m.modal.pickerCursor = 0
+		}
+	}
+	return m, nil
+}
+
 // ── modal keyboard ────────────────────────────────────────────────────────────
 
 func (m Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Session picker — fully custom nav
+	if m.modal.mode == modalSessionPicker {
+		return m.handlePickerKey(msg)
+	}
+
+	// Context menu
+	if m.modal.mode == modalContextMenu {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			m.modal.mode = modalNone
+		case "enter":
+			m.modal.mode = modalNone
+			return m, switchOrAttach(m.modal.pendingName)
+		case "c":
+			m.modal.mode = modalNone
+			return m.enterCopyMode()
+		case "P":
+			m.modal.mode = modalNone
+			return m.restartCurrentSession()
+		case "d":
+			m.modal.mode = modalConfirmDelete
+		}
+		return m, nil
+	}
+
 	// Step 1: dangerous mode confirmation for new/resume session.
 	if m.modal.step == 1 {
 		switch msg.String() {
@@ -1687,6 +1879,7 @@ func renderHelpBar(m Model) string {
 		{"d", "delete"},
 		{"N", "new project"},
 		{"a", "new skill"},
+		{"i", "skill info"},
 		{"?", "help"},
 		{"q", "quit"},
 	}
