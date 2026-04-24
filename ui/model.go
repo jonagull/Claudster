@@ -146,6 +146,15 @@ type Model struct {
 
 	searchMode bool
 	searchStr  string
+
+	// MRU session history — most recently attached first.
+	// ctrl+tab cycles through this list.
+	recentSessions []string
+
+	hoverSession string // card the mouse is currently over (overview only)
+	hoverX       int
+	hoverY       int
+	hoverPreview string // async-captured tmux output for hovered card
 }
 
 type tickMsg time.Time
@@ -155,6 +164,10 @@ type attachDoneMsg struct{ err error }
 type editorDoneMsg struct{}
 type metricsMsg metrics.Stats
 type popupErrMsg string
+type hoverPreviewMsg struct {
+	session string
+	output  string
+}
 
 func New() Model {
 	cfg, cfgErr := store.Load()
@@ -480,6 +493,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStatus("popup error: " + string(msg))
 		return m, nil
 
+	case hoverPreviewMsg:
+		if m.hoverSession == msg.session {
+			m.hoverPreview = msg.output
+		}
+		return m, nil
+
 	case editorDoneMsg:
 		cfg, err := store.Load()
 		if err != nil {
@@ -499,9 +518,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scanSkills()
 		m.rebuildRows()
 		m.recalcLayout()
-		return m, nil
+		// Re-enable mouse — ExecProcess suspends the alt screen and mouse reporting.
+		return m, tea.EnableMouseAllMotion
 
 	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionMotion {
+			return m.handleMouseMotion(msg.X, msg.Y)
+		}
 		switch msg.Button {
 		case tea.MouseButtonLeft:
 			if msg.Action == tea.MouseActionPress {
@@ -804,6 +827,7 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		m.pushRecentSession(row.label)
 		return m, switchOrAttach(row.label)
 
 	case rowTypeSkill:
@@ -1283,6 +1307,40 @@ func (m Model) handleMouseClick(x, y int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleMouseMotion(x, y int) (tea.Model, tea.Cmd) {
+	// Hover only applies to overview card grid
+	onOverview := m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].typ == rowTypeOverview
+	if !onOverview || x <= m.sidebarW+1 {
+		if m.hoverSession != "" {
+			m.hoverSession = ""
+			m.hoverPreview = ""
+		}
+		return m, nil
+	}
+
+	newHover := m.hitTestDashboardCard(x, y)
+	m.hoverX = x
+	m.hoverY = y
+
+	if newHover == m.hoverSession {
+		return m, nil // same card, nothing to do
+	}
+
+	m.hoverSession = newHover
+	m.hoverPreview = ""
+
+	if newHover == "" || !m.monitor.Exists(newHover) {
+		return m, nil
+	}
+
+	// Async-capture the pane output so we don't block the UI
+	name := newHover
+	return m, func() tea.Msg {
+		output := tmux.CapturePaneOutput(name, 20)
+		return hoverPreviewMsg{session: name, output: output}
+	}
+}
+
 // openContextMenu opens the context menu for the currently selected session.
 func (m Model) openContextMenu() Model {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
@@ -1418,48 +1476,87 @@ func (m Model) hitTestDashboardCard(absX, absY int) string {
 	return ""
 }
 
+// ── recent session history ────────────────────────────────────────────────────
+
+// pushRecentSession adds name to the front of the MRU list, deduplicating.
+func (m *Model) pushRecentSession(name string) {
+	filtered := m.recentSessions[:0:0]
+	for _, s := range m.recentSessions {
+		if s != name {
+			filtered = append(filtered, s)
+		}
+	}
+	m.recentSessions = append([]string{name}, filtered...)
+	if len(m.recentSessions) > 20 {
+		m.recentSessions = m.recentSessions[:20]
+	}
+}
+
 // ── session picker ────────────────────────────────────────────────────────────
 
 type pickerEntry struct {
 	sessionName string
 	projectName string
 	groupName   string
+	recent      bool // true = in the recent section (shown when query is empty)
 }
 
-func (m Model) allPickerEntries() []pickerEntry {
-	var entries []pickerEntry
+// pickerEntries returns the entry list for the current query.
+// When query is empty, recent sessions appear first (marked recent=true),
+// followed by everything else. When typing, it's a plain fuzzy filter.
+func (m Model) pickerEntries() []pickerEntry {
+	// Build a lookup of all sessions
+	type full struct{ project, group string }
+	lookup := make(map[string]full)
 	for _, g := range m.config.Groups {
 		for _, p := range g.Projects {
 			for _, s := range p.Sessions {
-				entries = append(entries, pickerEntry{
-					sessionName: s.Name,
-					projectName: p.Name,
-					groupName:   g.Name,
-				})
+				lookup[s.Name] = full{p.Name, g.Name}
 			}
 		}
 	}
-	return entries
-}
 
-func filterPickerEntries(entries []pickerEntry, query string) []pickerEntry {
-	if query == "" {
-		return entries
+	if m.modal.pickerQuery == "" {
+		// Recent section first, then everything else
+		inRecent := make(map[string]bool)
+		var out []pickerEntry
+		for _, name := range m.recentSessions {
+			if f, ok := lookup[name]; ok {
+				out = append(out, pickerEntry{name, f.project, f.group, true})
+				inRecent[name] = true
+			}
+		}
+		for _, g := range m.config.Groups {
+			for _, p := range g.Projects {
+				for _, s := range p.Sessions {
+					if !inRecent[s.Name] {
+						out = append(out, pickerEntry{s.Name, p.Name, g.Name, false})
+					}
+				}
+			}
+		}
+		return out
 	}
-	q := strings.ToLower(query)
+
+	// Fuzzy filter across all sessions
+	q := strings.ToLower(m.modal.pickerQuery)
 	var out []pickerEntry
-	for _, e := range entries {
-		if strings.Contains(strings.ToLower(e.sessionName), q) ||
-			strings.Contains(strings.ToLower(e.projectName), q) ||
-			strings.Contains(strings.ToLower(e.groupName), q) {
-			out = append(out, e)
+	for _, g := range m.config.Groups {
+		for _, p := range g.Projects {
+			for _, s := range p.Sessions {
+				if strings.Contains(strings.ToLower(s.Name), q) ||
+					strings.Contains(strings.ToLower(p.Name), q) ||
+					strings.Contains(strings.ToLower(g.Name), q) {
+					out = append(out, pickerEntry{s.Name, p.Name, g.Name, false})
+				}
+			}
 		}
 	}
 	return out
 }
 
 func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	entries := filterPickerEntries(m.allPickerEntries(), m.modal.pickerQuery)
+	entries := m.pickerEntries()
 
 	switch msg.String() {
 	case "ctrl+c":
@@ -1476,6 +1573,7 @@ func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+			m.pushRecentSession(name)
 			return m, switchOrAttach(name)
 		}
 	case "j", "down":
@@ -1518,6 +1616,7 @@ func (m Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.modal.mode = modalNone
 		case "enter":
 			m.modal.mode = modalNone
+			m.pushRecentSession(m.modal.pendingName)
 			return m, switchOrAttach(m.modal.pendingName)
 		case "c":
 			m.modal.mode = modalNone
@@ -1738,6 +1837,7 @@ func (m Model) handleModalEnter() (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		m.pushRecentSession(name)
 		return m, switchOrAttach(name)
 	}
 
@@ -1788,6 +1888,7 @@ func (m Model) commitSession(dangerous bool) (tea.Model, tea.Cmd) {
 			break
 		}
 	}
+	m.pushRecentSession(name)
 	return m, switchOrAttach(name)
 }
 
@@ -1813,6 +1914,29 @@ func (m Model) View() string {
 		y := m.height - 1 - panelH
 		if x >= 0 && y >= 0 {
 			view = overlayStrings(view, panel, x, y)
+		}
+	}
+
+	if m.hoverSession != "" {
+		tooltip := renderHoverTooltip(m)
+		if tooltip != "" {
+			const tipW = 82
+			tipH := strings.Count(tooltip, "\n") + 1
+			// Place tooltip to the right of the cursor; flip left if near edge.
+			tx := m.hoverX + 3
+			if tx+tipW > m.width {
+				tx = m.hoverX - tipW - 1
+			}
+			ty := m.hoverY - tipH/2
+			if ty+tipH > m.height-1 {
+				ty = m.height - 1 - tipH
+			}
+			if ty < 0 {
+				ty = 0
+			}
+			if tx >= 0 {
+				view = overlayStrings(view, tooltip, tx, ty)
+			}
 		}
 	}
 

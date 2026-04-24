@@ -496,6 +496,73 @@ func renderCard(m Model, c cardData) string {
 	return border.Width(cardContentW).Height(cardContentH).Render(content)
 }
 
+// renderHoverTooltip renders a compact floating preview for the hovered card.
+func renderHoverTooltip(m Model) string {
+	name := m.hoverSession
+	if name == "" {
+		return ""
+	}
+
+	running := m.monitor.Exists(name)
+	state := m.monitor.Get(name)
+
+	var header string
+	if !running {
+		header = MutedItem.Render("○  ") + SelectedItem.Render(name)
+	} else {
+		switch state.Status {
+		case tmux.StatusWorking:
+			frame := m.spinFrame % len(spinner)
+			color := workingPalette[m.spinFrame%len(workingPalette)]
+			icon := lipgloss.NewStyle().Foreground(color).Bold(true).Render(spinner[frame])
+			header = icon + "  " + SelectedItem.Render(name)
+		case tmux.StatusDone:
+			header = DoneBadge.Render("✓  ") + SelectedItem.Render(name)
+		default:
+			header = MutedItem.Render("─  ") + SelectedItem.Render(name)
+		}
+	}
+
+	const contentW = 76
+	var bodyLines []string
+	bodyLines = append(bodyLines, header)
+	bodyLines = append(bodyLines, MutedItem.Render(strings.Repeat("─", contentW)))
+
+	if !running {
+		bodyLines = append(bodyLines, MutedItem.Render("  session stopped"))
+	} else if m.hoverPreview == "" {
+		bodyLines = append(bodyLines, MutedItem.Render("  loading…"))
+	} else {
+		rawLines := strings.Split(m.hoverPreview, "\n")
+		// Trim trailing spaces (tmux pads to pane width)
+		for i, l := range rawLines {
+			rawLines[i] = strings.TrimRight(l, " ")
+		}
+		// Take last 18 lines
+		if len(rawLines) > 18 {
+			rawLines = rawLines[len(rawLines)-18:]
+		}
+		for _, l := range rawLines {
+			// Hard-truncate visible width so tooltip stays within bounds
+			if lipgloss.Width(l) > contentW {
+				runes := []rune(l)
+				if len(runes) > contentW {
+					l = string(runes[:contentW])
+				}
+			}
+			bodyLines = append(bodyLines, PreviewComment.Render(l))
+		}
+	}
+
+	body := strings.Join(bodyLines, "\n")
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPrimary).
+		Padding(0, 1).
+		Width(contentW).
+		Render(body)
+}
+
 // padLinesToWidth pads each line to exactly w visible characters using
 // lipgloss.Width for ANSI-aware measurement, so that the outer container
 // never needs to truncate lines (which can corrupt embedded ANSI sequences).

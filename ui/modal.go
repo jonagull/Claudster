@@ -312,11 +312,12 @@ func renderDangerousConfirm(m Model) string {
 }
 
 func renderSessionPicker(m Model) string {
-	entries := filterPickerEntries(m.allPickerEntries(), m.modal.pickerQuery)
+	entries := m.pickerEntries()
+	isFiltering := m.modal.pickerQuery != ""
 
 	prompt := HelpKey.Render("  ⌕  ") + NormalItem.Render(m.modal.pickerQuery) + MutedItem.Render("█")
 
-	const maxVisible = 12
+	const maxVisible = 14
 	var resultLines []string
 	if len(entries) == 0 {
 		resultLines = append(resultLines, MutedItem.PaddingLeft(2).Render("no sessions match"))
@@ -329,8 +330,23 @@ func renderSessionPicker(m Model) string {
 		if end > len(entries) {
 			end = len(entries)
 		}
+
+		// Track section transitions so we can insert a divider
+		prevRecent := entries[start].recent
+		if !isFiltering && start == 0 && len(m.recentSessions) > 0 {
+			resultLines = append(resultLines, MutedItem.PaddingLeft(2).Render("recent"))
+		}
+
 		for i := start; i < end; i++ {
 			e := entries[i]
+
+			// Insert "all sessions" header when we cross from recent → rest
+			if !isFiltering && !e.recent && prevRecent {
+				resultLines = append(resultLines, "")
+				resultLines = append(resultLines, MutedItem.PaddingLeft(2).Render("all sessions"))
+			}
+			prevRecent = e.recent
+
 			running := m.monitor.Exists(e.sessionName)
 			state := m.monitor.Get(e.sessionName)
 
