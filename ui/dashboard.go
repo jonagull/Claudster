@@ -513,7 +513,7 @@ func renderHoverTooltip(m Model) string {
 		switch state.Status {
 		case tmux.StatusWorking:
 			frame := m.spinFrame % len(spinner)
-			color := workingPalette[m.spinFrame%len(workingPalette)]
+			color := WorkingPalette[m.spinFrame%len(WorkingPalette)]
 			icon := lipgloss.NewStyle().Foreground(color).Bold(true).Render(spinner[frame])
 			header = icon + "  " + SelectedItem.Render(name)
 		case tmux.StatusDone:

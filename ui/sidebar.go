@@ -194,7 +194,7 @@ func sidebarIcon(m Model, state tmux.State, running bool) string {
 	switch state.Status {
 	case tmux.StatusWorking:
 		frame := m.spinFrame % len(spinner)
-		color := workingPalette[m.spinFrame%len(workingPalette)]
+		color := WorkingPalette[m.spinFrame%len(WorkingPalette)]
 		return lipgloss.NewStyle().Foreground(color).Bold(true).Render(spinner[frame])
 	case tmux.StatusDone:
 		return DoneBadge.Render("✓")

@@ -51,6 +51,7 @@ type UI struct {
 	SidebarWidth int    `yaml:"sidebar_width,omitempty"`
 	Editor       string `yaml:"editor,omitempty"`
 	GitClient    string `yaml:"git_client,omitempty"`
+	Theme        string `yaml:"theme,omitempty"` // "" or "dark" = dark mode, "light" = light mode
 }
 
 type Config struct {
