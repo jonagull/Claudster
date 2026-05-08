@@ -21,18 +21,6 @@ import (
 
 var spinner = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 
-// workingPalette cycles through a purple→blue→cyan gradient in sync with the spinner.
-var workingPalette = []lipgloss.Color{
-	"#BB9AF7", // violet
-	"#9D7CD8", // purple
-	"#7AA2F7", // blue
-	"#41A6B5", // teal-blue
-	"#06B6D4", // cyan
-	"#41A6B5", // teal-blue
-	"#7AA2F7", // blue
-	"#9D7CD8", // purple
-}
-
 // ── row types ─────────────────────────────────────────────────────────────────
 
 type rowType int
@@ -171,6 +159,7 @@ type hoverPreviewMsg struct {
 
 func New() Model {
 	cfg, cfgErr := store.Load()
+	ApplyTheme(cfg.UI.Theme == "light")
 	m := Model{
 		config:        cfg,
 		monitor:       tmux.NewMonitor(),
@@ -665,6 +654,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "i":
 		m.modal.mode = modalSkillsInfo
 		return m, nil
+
+	case "l":
+		light := m.config.UI.Theme != "light"
+		if light {
+			m.config.UI.Theme = "light"
+		} else {
+			m.config.UI.Theme = ""
+		}
+		ApplyTheme(light)
+		store.Save(m.config)
 
 	case "e":
 		editor := resolveEditor(m.config.UI.Editor)
@@ -2004,6 +2003,7 @@ func renderHelpBar(m Model) string {
 		{"N", "new project"},
 		{"a", "new skill"},
 		{"i", "skill info"},
+		{"l", "light/dark"},
 		{"?", "help"},
 		{"q", "quit"},
 	}
